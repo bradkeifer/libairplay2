@@ -61,7 +61,7 @@
 #include <libavutil/base64.h>
 
 #include "logger.h"
-// #include "conffile.h"
+#include "conffile.h"
 #include "misc.h"
 
 
