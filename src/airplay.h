@@ -38,7 +38,7 @@
 #define MS2NTP(ms) (((((uint64_t) (ms)) << 22) / 1000) << 10)
 #define MS2TS(ms, rate) ((((uint64_t) (ms)) * (rate)) / 1000)
 
-uint64_t airplay2cl_get_ntp(struct ntp_timestamp* ntp);
-int airplay2cl_create(struct in_addr host, char *DACP_id);
+uint64_t airplaycl_get_ntp(struct ntp_timestamp* ntp);
+int airplaycl_create(struct in_addr host, char *DACP_id);
 
 #endif

@@ -19,9 +19,13 @@ BUILDDIR   = $(dir $(CORE))$(HOST)/$(PLATFORM)
 LIB        = lib/$(HOST)/$(PLATFORM)/libairplay2.a
 EXECUTABLE = $(CORE)-$(PLATFORM)
 
-DEFINES  = -DNDEBUG -D_GNU_SOURCE -DHAVE_TIMER_SETTIME
+DEFINES  = -DNDEBUG -D_GNU_SOURCE -DHAVE_TIMER_SETTIME \
+		-DSTATEDIR=\".\" -DPACKAGE_NAME=\"libairplay2\" -DVERSION=\"0.1\" \
+		-DPACKAGE=\"libairplay2\" -DPACKAGE_VERSION=\"0.1\" -DHAVE_CONFIG_H
 CFLAGS  += -Wall -fPIC -ggdb -O2 $(DEFINES) -fdata-sections -ffunction-sections
-LDFLAGS += -lpthread -ldl -lm -lplist-2.0 -levent -L. -L /usr/lib
+LDFLAGS += -lpthread -ldl -lm -lplist-2.0 -levent -lconfuse -luuid -lavutil \
+		-lunistring \
+		-L. -L /usr/lib
 
 TOOLS		= crosstools/src
 FETCHER		= http-fetcher
@@ -54,7 +58,8 @@ CURVE25519_SOURCES = curve25519_dh.c curve25519_mehdi.c curve25519_order.c curve
 # 	  alac.c \
 # 	  http_fetcher.c http_error_codes.c
 
-SOURCES = http_fetcher.c http_error_codes.c airplay2_client.c
+SOURCES = http_fetcher.c http_error_codes.c airplay.c \
+		logger.c conffile.c misc.c
 
 # SOURCES_BIN = cross_log.c cross_ssl.c cross_util.c cross_net.c platform.c cliraop.c
 

@@ -41,20 +41,22 @@
 #include <event2/buffer.h>
 #include <gcrypt.h>
 
+#include <limits.h>
+
 #include "plist_wrap.h"
 
 #include "evrtsp/evrtsp.h"
-// #include "conffile.h"
+#include "conffile.h"
 #include "logger.h"
-// #include "mdns.h"
+#include "mdns.h"
 #include "misc.h"
 // #include "player.h"
-// #include "db.h"
-// #include "artwork.h"
+#include "db.h"
+#include "artwork.h"
 // #include "dmap_common.h"
 #include "rtp_common.h"
-// #include "transcode.h"
-// #include "outputs.h"
+#include "transcode.h"
+#include "outputs.h"
 
 #include "airplay_events.h"
 #include "pair_ap/pair.h"
@@ -1717,7 +1719,6 @@ airplay_metadata_send(struct output_metadata *metadata)
   airplay_metadata_purge();
   airplay_cur_metadata = metadata;
 }
-
 
 /* ------------------------------ Volume handling --------------------------- */
 
@@ -4128,3 +4129,28 @@ struct output_definition output_airplay =
   .metadata_purge = airplay_metadata_purge,
   .device_authorize = airplay_device_authorize,
 };
+
+/* ---------------------------- NTP timestamp ------------------------------- */
+uint64_t airplaycl_get_ntp(struct ntp_timestamp* ntp)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_REALTIME, &ts) < 0)
+	{
+		DPRINTF(E_LOG, L_AIRPLAY, "clock_gettime failed: %s", strerror(errno));
+		return -1;
+	}
+
+	if (ntp) {
+		ntp->sec = ts.tv_sec + NTP_EPOCH_DELTA;
+		ntp->frac = (uint32_t)((double)ts.tv_nsec * 1e-9 * FRAC);
+	}
+
+	return ((uint64_t) (ts.tv_sec + NTP_EPOCH_DELTA) << 32) | (uint32_t)((double)ts.tv_nsec * 1e-9 * FRAC);
+}
+
+/* ---------------------------- Module initialization ------------------------ */
+int *airplay2cl_create(struct in_addr host, char *DACP_id)
+{
+	return 0;
+}

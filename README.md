@@ -5,7 +5,7 @@ AirPlay2 player and library
 
 ```sh
 apt-get update
-apt-get install -y build-essential cmake  libssl-dev libevent-dev libgcrypt20-dev
+apt-get install -y build-essential cmake  libssl-dev libevent-dev libgcrypt20-dev libconfuse-dev
 git clone https://github.com/bradkeifer/libairplay2.git
 cd libairplay2
 #git submodule update --init
@@ -17,7 +17,7 @@ cd libairplay2
 ## Building (alpine musl build)
 
 ```sh
-apk add --update alpine-sdk build-base openssl-dev libevent-dev libgcrypt-dev
+apk add --update alpine-sdk build-base openssl-dev libevent-dev libgcrypt-dev libconfuse-dev
 git clone https://github.com/bradkeifer/libairplay2.git
 cd libairplay2
 

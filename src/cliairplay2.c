@@ -21,8 +21,12 @@
  * 	Philippe <philippe_44@outlook.com>
  *
  */
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -30,6 +34,7 @@
 #include <string.h>
 #include "platform.h"
 #include <assert.h>
+#include <pthread.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -47,14 +52,18 @@
 #endif
 #endif
 
-#include "cross_thread.h"
+// from cliraop - try to eliminate
 #include "cross_net.h"
 #include "cross_ssl.h"
 #include "cross_util.h"
 #include "cross_log.h"
 #include "http_fetcher.h"
-#include "airplay2_client.h"
+#include "airplay.h"
 
+// from owntones
+#include "logger.h"
+
+// try to remove as much of below as possible
 #define AIRPLAY2_SEC(ntp) ((uint32_t)((ntp) >> 32))
 #define AIRPLAY2_FRAC(ntp) ((uint32_t)(ntp))
 #define AIRPLAY2_SECNTP(ntp) AIRPLAY2_SEC(ntp), AIRPLAY2_FRAC(ntp)
@@ -81,6 +90,7 @@ enum
 	PLAYING
 } status;
 
+// seek to delete this cliraop log_level stuff and use owntones logging solution
 // debug level from tools & other elements
 log_level util_loglevel;
 log_level airplay2_loglevel;
@@ -138,7 +148,7 @@ static int print_usage(char *argv[])
 
 		   "\t[-if <ipaddress>] (IP of the interface to bind to)\n"
 
-		   "\t[-debug <debug level>] (0 = silent)\n",
+		   "\t[-debug <debug level>] (0 = FATAL, 5 = SPAM)\n",
 		   name);
 	return -1;
 }
@@ -187,7 +197,7 @@ static void *CmdPipeReaderThread(void *args)
 				if (!glMainRunning)
 					break;
 
-				LOG_DEBUG("Received line on named pipe %s", line);
+				DPRINTF(E_DBG, L_MAIN, "Received line on named pipe %s\n", line);
 				// extract key-value pair within line
 				char *key = strtok_r(line, "=", &save_ptr2);
 				if (strlen(key) == 0)
@@ -221,25 +231,25 @@ static void *CmdPipeReaderThread(void *args)
 				{
 					if (startsWith("http://", value))
 					{
-						LOG_DEBUG("Downloading artwork from URL: %s", value);
+						DPRINTF(E_DBG, L_MAIN, "Downloading artwork from URL: %s\n", value);
 						char *contentType;
 						char *content;
 						int size = http_fetch(value, &contentType, &content);
 						if (size > 0 && glMainRunning)
 						{
-							LOG_INFO("Sending artwork to player...");
+							DPRINTF(E_INFO, L_MAIN, "Sending artwork to player...\n");
 							// airplay2cl_set_artwork(airplay2cl, contentType, size, content);
 							free(content);
 						}
 						else
 						{
-							LOG_WARN("Unable to download artwork %s", value);
+							DPRINTF(E_WARN, L_MAIN, "Unable to download artwork %s\n", value);
 						}
 					}
 					else if (access(value, F_OK) == 0)
 					{
 						// local file
-						LOG_DEBUG("Setting artwork from file: %s", value);
+						DPRINTF(E_DBG, L_MAIN, "Setting artwork from file: %s\n", value);
 						FILE *infile;
 						char *buffer;
 						long numbytes;
@@ -255,12 +265,12 @@ static void *CmdPipeReaderThread(void *args)
 					}
 					else
 					{
-						LOG_WARN("Unable to process artwork path: %s", value);
+						DPRINTF(E_WARN, L_MAIN, "Unable to process artwork path: %s\n", value);
 					}
 				}
 				else if (strcmp(key, "VOLUME") == 0)
 				{
-					LOG_INFO("Setting volume to: %s", value);
+					DPRINTF(E_INFO, L_MAIN, "Setting volume to: %s\n", value);
 					// airplay2cl_set_volume(airplay2cl, airplay2cl_float_volume(atoi(value)));
 				}
 				else if (strcmp(key, "ACTION") == 0 && strcmp(value, "PAUSE") == 0)
@@ -270,35 +280,35 @@ static void *CmdPipeReaderThread(void *args)
 						// airplay2cl_pause(airplay2cl);
 						// airplay2cl_flush(airplay2cl);
 						status = PAUSED;
-						// LOG_INFO("Pause at : %u.%u", AIRPLAY2_SECNTP(airplay2cl_get_ntp(NULL)));
-						LOG_INFO("Paused");
+						// LOG_INFO("Pause at : %u.%u", AIRPLAY2_SECNTP(airplaycl_get_ntp(NULL)));
+						DPRINTF(E_INFO, L_MAIN, "Paused\n");
 					}
 					else
 					{
-						LOG_WARN("Pause requested but player is already paused");
+						DPRINTF(E_WARN, L_MAIN, "Pause requested but player is already paused\n");
 					}
 				}
 				else if (strcmp(key, "ACTION") == 0 && strcmp(value, "PLAY") == 0)
 				{
-					// uint64_t now = airplay2cl_get_ntp(NULL);
+					// uint64_t now = airplaycl_get_ntp(NULL);
 					// uint64_t start_at = now + MS2NTP(200) - TS2NTP(latency, airplay2cl_sample_rate(airplay2cl));
 					status = PLAYING;
 					// airplay2cl_start_at(airplay2cl, start_at);
 					// LOG_INFO("Re-started at : %u.%u", AIRPLAY2_SECNTP(start_at));
-					LOG_INFO("Re-started");
+					DPRINTF(E_INFO, L_MAIN, "Re-started\n");
 				}
 				else if (strcmp(key, "ACTION") == 0 && strcmp(value, "STOP") == 0)
 				{
 					status = STOPPED;
-					// LOG_INFO("Stopped at : %u.%u", AIRPLAY2_SECNTP(airplay2cl_get_ntp(NULL)));
-					LOG_INFO("Stopped");
+					// LOG_INFO("Stopped at : %u.%u", AIRPLAY2_SECNTP(airplaycl_get_ntp(NULL)));
+					DPRINTF(E_INFO, L_MAIN, "Stopped\n");
 					// airplay2cl_stop(airplay2cl);
 					break;
 				}
 				else if (strcmp(key, "ACTION") == 0 && strcmp(value, "SENDMETA") == 0)
 				{
 					// LOG_INFO("Sending metadata: %p", metadata);
-					LOG_INFO("Sending metadata");
+					DPRINTF(E_INFO, L_MAIN, "Sending metadata\n");
 					// airplay2cl_set_daap(airplay2cl, 4, "minm", 's', metadata.title,
 									// "asar", 's', metadata.artist,
 									// "asal", 's', metadata.album,
@@ -349,13 +359,15 @@ int main(int argc, char *argv[])
 	uint32_t glNetmask;
 	char glInterface[16] = "?";
 	static struct in_addr glHost;
+	int ret;
 
+	// TODO: <@bradkeifer>  refactor this to same method used in owntones (getopt)
 	// parse arguments
 	for (i = 1; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "-ntp"))
 		{
-			uint64_t t = airplay2cl_get_ntp(NULL);
+			uint64_t t = airplaycl_get_ntp(NULL);
 			printf("%" PRIu64 "\n", t);
 			exit(0);
 		}
@@ -458,8 +470,22 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	ret = logger_init(NULL, NULL, (level < 0) ? E_LOG : level, NULL);
+	if (ret != 0)
+		{
+		fprintf(stderr, "Could not initialize log facility\n");
+
+		return EXIT_FAILURE;
+		}
+
+		// I think player.hostname logic above is screwed, especially when combined with the code below that 
+	DPRINTF(E_LOG, L_MAIN, "player.hostname: %s, fname: %s\n", player.hostname, fname);
+
+	// This obtains host (192.168.4.64), interface (eth0) and netmask (0xffffff00)
+	// for the host that is running MASS. This call creates dependency for cross_net.[c,h]
+	// and it would be good to get rid of it if possible.
 	glHost = get_interface(!strchr(glInterface, '?') ? glInterface : NULL, &iface, &glNetmask);
-	LOG_INFO("Binding to %s [%s] with mask 0x%08x", inet_ntoa(glHost), iface, ntohl(glNetmask));
+	DPRINTF(E_INFO, L_MAIN,"Binding to %s [%s] with mask 0x%08x\n", inet_ntoa(glHost), iface, ntohl(glNetmask));
 	NFREE(iface);
 
 	if (!player.hostname)
@@ -473,7 +499,7 @@ int main(int argc, char *argv[])
 	}
 	else if ((infile = open(fname, O_RDONLY)) == -1)
 	{
-		LOG_ERROR("cannot open file %s", fname);
+		DPRINTF(E_FATAL, L_MAIN, "cannot open file %s\n", fname);
 		close_platform();
 		exit(1);
 	}
@@ -482,22 +508,23 @@ int main(int argc, char *argv[])
 	player.hostent = gethostbyname(player.hostname);
 	if (!player.hostent)
 	{
-		LOG_ERROR("Cannot resolve name %s", player.hostname);
+		DPRINTF(E_FATAL, L_MAIN, "Cannot resolve name %s\n", player.hostname);
 		exit(1);
 	}
 	memcpy(&player.addr.s_addr, player.hostent->h_addr_list[0], player.hostent->h_length);
 
-	LOG_DEBUG("am=%s", am);
+	DPRINTF(E_DBG, L_MAIN, "am=%s\n", am);
 
 	if (am && strcasestr(am, "appletv") && pk && *pk && !secret)
 	{
-		LOG_ERROR("AppleTV requires authentication (need to send secret field)");
+		DPRINTF(E_FATAL, L_MAIN, "AppleTV requires authentication (need to send secret field)\n");
 		exit(1);
 	}
 
 	// setup named pipe for metadata/commands
-	snprintf(cmdPipeName, sizeof(cmdPipeName), "/tmp/airplay2-%s", activeRemote);
-	LOG_INFO("Listening for commands on named pipe %s", cmdPipeName);
+	// TODO: <@bradkeifer> make named pipe filename an argument to reduce coupling
+	snprintf(cmdPipeName, sizeof(cmdPipeName), "/tmp/raop-%s", activeRemote);
+	DPRINTF(E_INFO, L_MAIN, "Listening for commands on named pipe %s\n", cmdPipeName);
 	mkfifo(cmdPipeName, 0666);
 
 	// init platform, initializes stdin
@@ -532,21 +559,22 @@ int main(int argc, char *argv[])
 	}
 
 	// create the airplay2 context
-	/*
-	if ((airplay2cl = airplay2cl_create(glHost, 0, 0, glDACPid, activeRemote, alac ? AIRPLAY2_ALAC : AIRPLAY2_ALAC_RAW, DEFAULT_FRAMES_PER_CHUNK,
-								latency, crypto, auth, secret, password, et, md,
-								44100, 16, 2,
-								volume > 0 ? airplay2cl_float_volume(volume) : -144.0,
-								airplay_version)) == NULL)
+	// if ((airplay2cl = airplay2cl_create(glHost, 0, 0, glDACPid, activeRemote, alac ? AIRPLAY2_ALAC : AIRPLAY2_ALAC_RAW, DEFAULT_FRAMES_PER_CHUNK,
+	// 							latency, crypto, auth, secret, password, et, md,
+	// 							44100, 16, 2,
+	// 							volume > 0 ? airplay2cl_float_volume(volume) : -144.0)) == NULL)
+	if (airplaycl_create(glHost, glDACPid) < 0)
 	{
-		LOG_ERROR("Cannot init AIRPLAY2 %p", airplay2cl);
+		DPRINTF(E_FATAL, L_MAIN, "Cannot create airplay2 context %p", airplay2cl);
 		close_platform();
 		exit(1);
 	}
-	*/
 
 	// connect to player
-	LOG_INFO("Connecting to player: %s (%s:%hu)", player.udn ? player.udn : player.hostname, inet_ntoa(player.addr), player.port);
+	DPRINTF(E_INFO, L_MAIN, "Connecting to player: %s (%s:%hu)\n", 
+		player.udn ? player.udn : player.hostname, 
+		inet_ntoa(player.addr), player.port
+	);
 	/*
 	if (!airplay2cl_connect(airplay2cl, player.addr, player.port, volume > 0))
 	{
@@ -561,7 +589,7 @@ int main(int argc, char *argv[])
 
 	if (start || wait)
 	{
-		uint64_t now = airplay2cl_get_ntp(NULL);
+		uint64_t now = airplaycl_get_ntp(NULL);
 
 		start_at = (start ? start : now) + MS2NTP(wait) -
 				   TS2NTP(latency, airplay2cl_sample_rate(airplay2cl));
@@ -576,7 +604,7 @@ int main(int argc, char *argv[])
 	// start the command/metadata reader thread
 	pthread_create(&glCmdPipeReaderThread, NULL, CmdPipeReaderThread, NULL);
 
-	// start = airplay2cl_get_ntp(NULL);
+	// start = airplaycl_get_ntp(NULL);
 	status = PLAYING;
 
 	buf = malloc(DEFAULT_FRAMES_PER_CHUNK * 4);
@@ -591,7 +619,7 @@ int main(int argc, char *argv[])
 		if (status == STOPPED)
 			break;
 
-		now = airplay2cl_get_ntp(NULL);
+		now = airplaycl_get_ntp(NULL);
 
 		// execute every second
 		if (now - last > MS2NTP(1000))
@@ -625,7 +653,7 @@ int main(int argc, char *argv[])
 			usleep(1000);
 		}
 	}
-	LOG_INFO("end of stream reached");
+	DPRINTF(E_INFO, L_MAIN, "end of stream reached\n");
 
 	glMainRunning = false;
 	free(buf);
@@ -634,7 +662,7 @@ int main(int argc, char *argv[])
 	goto exit;
 
 exit:
-	LOG_INFO("exiting...");
+	DPRINTF(E_INFO, L_MAIN, "exiting...\n");
 	close(cmdPipeFd);
 	unlink(cmdPipeName);
 	// airplay2cl_destroy(airplay2cl);
