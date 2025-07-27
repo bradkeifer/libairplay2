@@ -2042,11 +2042,13 @@ transcode_decode_setup_raw(enum transcode_profile profile, struct media_quality 
 
   CHECK_NULL(L_XCODE, ctx = calloc(1, sizeof(struct decode_ctx)));
 
+  DPRINTF(E_DBG, L_XCODE, "transcode_decode_setup_raw(): About to call init_settings\n");
   if (init_settings(&ctx->settings, profile, quality) < 0)
     {
       goto out_free_ctx;
     }
 
+  DPRINTF(E_DBG, L_XCODE, "transcode_decode_setup_raw(): About to call avcodec_descriptor_get\n");
   codec_desc = avcodec_descriptor_get(ctx->settings.audio_codec);
   if (!codec_desc)
     {
@@ -2054,6 +2056,7 @@ transcode_decode_setup_raw(enum transcode_profile profile, struct media_quality 
       goto out_free_ctx;
     }
 
+  DPRINTF(E_DBG, L_XCODE, "transcode_decode_setup_raw(): About to call avcodec_find_decoder\n");
   // In raw mode we won't actually need to read or decode, but we still setup
   // the decode_ctx because transcode_encode_setup() gets info about the input
   // through this structure (TODO dont' do that)
@@ -2068,10 +2071,12 @@ transcode_decode_setup_raw(enum transcode_profile profile, struct media_quality 
   CHECK_NULL(L_XCODE, ctx->audio_stream.codec = avcodec_alloc_context3(decoder));
   CHECK_NULL(L_XCODE, ctx->audio_stream.stream = avformat_new_stream(ctx->ifmt_ctx, NULL));
 
+  DPRINTF(E_DBG, L_XCODE, "transcode_decode_setup_raw(): About to call stream_settings_set\n");
   stream_settings_set(&ctx->audio_stream, &ctx->settings, decoder->type);
 
   // Copy the data we just set to the structs we will be querying later, e.g. in open_filter
   ctx->audio_stream.stream->time_base = ctx->audio_stream.codec->time_base;
+  DPRINTF(E_DBG, L_XCODE, "transcode_decode_setup_raw(): About to call avcodec_parameters_from_context\n");
   ret = avcodec_parameters_from_context(ctx->audio_stream.stream->codecpar, ctx->audio_stream.codec);
   if (ret < 0)
     {
@@ -2079,6 +2084,7 @@ transcode_decode_setup_raw(enum transcode_profile profile, struct media_quality 
       goto out_free_codec;
     }
 
+  DPRINTF(E_DBG, L_XCODE, "transcode_decode_setup_raw(): Finished\n");
   return ctx;
 
  out_free_codec:

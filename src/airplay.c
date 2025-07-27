@@ -57,6 +57,7 @@
 #include "rtp_common.h"
 #include "transcode.h"
 #include "outputs.h"
+#include "airplay.h"
 
 #include "airplay_events.h"
 #include "pair_ap/pair.h"
@@ -76,11 +77,8 @@
 #define AIRPLAY_USE_AUTH_SETUP               0
 
 // Full traffic dumps in the log in debug mode
-#define AIRPLAY_DUMP_TRAFFIC                 0
-
-#define AIRPLAY_QUALITY_SAMPLE_RATE_DEFAULT     44100
-#define AIRPLAY_QUALITY_BITS_PER_SAMPLE_DEFAULT 16
-#define AIRPLAY_QUALITY_CHANNELS_DEFAULT        2
+// #define AIRPLAY_DUMP_TRAFFIC                 0
+#define AIRPLAY_DUMP_TRAFFIC                 1
 
 // AirTunes v2 number of samples per packet
 // Probably using this value because 44100/352 and 48000/352 has good 32 byte
@@ -110,16 +108,6 @@
 
 // This is an arbitrary value which just needs to be kept in sync with the config
 #define AIRPLAY_CONFIG_MAX_VOLUME     11
-
-/* Keep in sync with const char *airplay_devtype */
-enum airplay_devtype {
-  AIRPLAY_DEV_APEX2_80211N,
-  AIRPLAY_DEV_APEX3_80211N,
-  AIRPLAY_DEV_APPLETV,
-  AIRPLAY_DEV_APPLETV4,
-  AIRPLAY_DEV_HOMEPOD,
-  AIRPLAY_DEV_OTHER,
-};
 
 // Session is starting up
 #define AIRPLAY_STATE_F_STARTUP    (1 << 13)
@@ -189,18 +177,6 @@ enum airplay_status_flags
   AIRPLAY_FLAG_IS_APPLE_MUSIC_SUBSCRIBER      = (1 << 15),
   AIRPLAY_FLAG_CLOUD_LIBRARY_ON               = (1 << 16),
   AIRPLAY_FLAG_RECEIVER_IS_BUSY               = (1 << 17),
-};
-
-// Info about the device, which is not required by the player, only internally
-struct airplay_extra
-{
-  enum airplay_devtype devtype;
-
-  char *mdns_name;
-
-  uint16_t wanted_metadata;
-  bool supports_auth_setup;
-  bool supports_pairing_transient;
 };
 
 struct airplay_master_session
@@ -354,7 +330,6 @@ struct airplay_seq_ctx
   const char *log_caller;
 };
 
-
 /* ------------------------------ MISC GLOBALS ------------------------------ */
 
 #if AIRPLAY_USE_AUTH_SETUP
@@ -416,17 +391,7 @@ static const struct features_type_map features_map[] =
     { 60, "SupportsAudioMediaDataControl" }, // 59 && 60 && !disableMediaDataControl
     { 61, "SupportsRFC2198Redundancy" },
   };
-
-/* Keep in sync with enum airplay_devtype */
-static const char *airplay_devtype[] =
-{
-  "AirPort Express 2 - 802.11n",
-  "AirPort Express 3 - 802.11n",
-  "AppleTV",
-  "AppleTV4",
-  "HomePod",
-  "Other",
-};
+;
 
 /* Struct with default quality levels */
 static struct media_quality airplay_quality_default =
@@ -870,15 +835,20 @@ request_headers_add(struct evrtsp_request *req, struct airplay_session *rs, enum
   const char *url;
   int ret;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "Adding request headers for method %s\n", evrtsp_method(req_method));
   snprintf(buf, sizeof(buf), "%d", rs->cseq);
+  DPRINTF(E_DBG, L_AIRPLAY, "request_headers_add(): Calling evrtsp_add_header: CSeq: %s\n", buf);
   evrtsp_add_header(req->output_headers, "CSeq", buf);
 
   rs->cseq++;
 
   user_agent = cfg_getstr(cfg_getsec(cfg, "general"), "user_agent");
+  if (!user_agent) user_agent = "iTunes/7.6.2 (Windows; N)";  // TODO - fix this hack
+  DPRINTF(E_DBG, L_AIRPLAY, "request_headers_add(): Calling evrtsp_add_header: User-Agent: %s\n", user_agent);
   evrtsp_add_header(req->output_headers, "User-Agent", user_agent);
 
   client_name = cfg_getstr(cfg_getsec(cfg, "library"), "name");
+  DPRINTF(E_DBG, L_AIRPLAY, "request_headers_add(): Calling evrtsp_add_header: X-Apple-Client-Name: %s\n", client_name);
   evrtsp_add_header(req->output_headers, "X-Apple-Client-Name", client_name);
 
   // If we have a realm + nonce it means that the device told us in the reply to
@@ -896,12 +866,15 @@ request_headers_add(struct evrtsp_request *req, struct airplay_session *rs, enum
     }
 
   snprintf(buf, sizeof(buf), "%" PRIX64, libhash);
+  DPRINTF(E_DBG, L_AIRPLAY, "request_headers_add(): Calling evrtsp_add_header: Client-Instance: %s\n", buf);
   evrtsp_add_header(req->output_headers, "Client-Instance", buf);
+  DPRINTF(E_DBG, L_AIRPLAY, "request_headers_add(): Calling evrtsp_add_header: DACP-ID: %s\n", buf);
   evrtsp_add_header(req->output_headers, "DACP-ID", buf);
 
   // We set Active-Remote as 32 bit unsigned decimal, as at least my device
   // can't handle any larger. Must be aligned with volume_byactiveremote().
   snprintf(buf, sizeof(buf), "%" PRIu32, (uint32_t)rs->device_id);
+  DPRINTF(E_DBG, L_AIRPLAY, "request_headers_add(): Calling evrtsp_add_header: Active-Remote: %s\n", buf);
   evrtsp_add_header(req->output_headers, "Active-Remote", buf);
 
 #if AIRPLAY_USE_STREAMID
@@ -1139,35 +1112,42 @@ master_session_make(struct media_quality *quality)
     }
 
   // Let's create a master session
-  ret = outputs_quality_subscribe(quality);
-  if (ret < 0)
-    {
-      DPRINTF(E_LOG, L_AIRPLAY, "Could not subscribe to required audio quality (%d/%d/%d)\n", quality->sample_rate, quality->bits_per_sample, quality->channels);
-      return NULL;
-    }
+  // BK
+  // ret = outputs_quality_subscribe(quality);
+  // if (ret < 0)
+  //   {
+  //     DPRINTF(E_LOG, L_AIRPLAY, "Could not subscribe to required audio quality (%d/%d/%d)\n", quality->sample_rate, quality->bits_per_sample, quality->channels);
+  //     return NULL;
+  //   }
 
   CHECK_NULL(L_AIRPLAY, rms = calloc(1, sizeof(struct airplay_master_session)));
 
+  DPRINTF(E_DBG, L_AIRPLAY, "master_session_make(): Calling rtp_session_new with quality %d/%d/%d\n",
+    quality->sample_rate, quality->bits_per_sample, quality->channels);
   rms->rtp_session = rtp_session_new(quality, AIRPLAY_PACKET_BUFFER_SIZE, 0);
   if (!rms->rtp_session)
     {
       goto error;
     }
 
-  encode_args.src_ctx = transcode_decode_setup_raw(XCODE_PCM16, quality);
-  if (!encode_args.src_ctx)
-    {
-      DPRINTF(E_LOG, L_AIRPLAY, "Could not create decoding context\n");
-      goto error;
-    }
+  // BK
+  // DPRINTF(E_DBG, L_AIRPLAY, "master_session(): Calling transcode_decode_setup_raw for XCODE_PCM16\n");
+  // encode_args.src_ctx = transcode_decode_setup_raw(XCODE_PCM16, quality);
+  // if (!encode_args.src_ctx)
+  //   {
+  //     DPRINTF(E_LOG, L_AIRPLAY, "Could not create decoding context\n");
+  //     goto error;
+  //   }
 
-  rms->encode_ctx = transcode_encode_setup(encode_args);
-  transcode_decode_cleanup(&encode_args.src_ctx);
-  if (!rms->encode_ctx)
-    {
-      DPRINTF(E_LOG, L_AIRPLAY, "Will not be able to stream AirPlay 2, ffmpeg has no ALAC encoder\n");
-      goto error;
-    }
+  // DPRINTF(E_DBG, L_AIRPLAY, "master_session(): Calling transcode_encode_setup\n");
+  // rms->encode_ctx = transcode_encode_setup(encode_args);
+  // DPRINTF(E_DBG, L_AIRPLAY, "master_session(): Calling transcode_decode_cleanup\n");
+  // transcode_decode_cleanup(&encode_args.src_ctx);
+  // if (!rms->encode_ctx)
+  //   {
+  //     DPRINTF(E_LOG, L_AIRPLAY, "Will not be able to stream AirPlay 2, ffmpeg has no ALAC encoder\n");
+  //     goto error;
+  //   }
 
   rms->quality = *quality;
   rms->samples_per_packet = AIRPLAY_SAMPLES_PER_PACKET;
@@ -1181,6 +1161,7 @@ master_session_make(struct media_quality *quality)
   rms->next = airplay_master_sessions;
   airplay_master_sessions = rms;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "master_session(): Finished\n");
   return rms;
 
  error:
@@ -1557,14 +1538,17 @@ session_make(struct output_device *rd, int callback_id)
   rs->timing_svc = &airplay_timing_svc;
   rs->control_svc = &airplay_control_svc;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "session_make(): Calling session_connection_setup for AF_INET6\n");
   ret = session_connection_setup(rs, rd, AF_INET6);
   if (ret < 0)
     {
+      DPRINTF(E_DBG, L_AIRPLAY, "session_make(): Calling session_connection_setup for AF_INET\n");
       ret = session_connection_setup(rs, rd, AF_INET);
       if (ret < 0)
 	goto error;
     }
 
+  DPRINTF(E_DBG, L_AIRPLAY, "session_make(): Calling master_session_make()\n");
   rs->master_session = master_session_make(&rd->quality);
   if (!rs->master_session)
     {
@@ -1577,8 +1561,10 @@ session_make(struct output_device *rd, int callback_id)
   airplay_sessions = rs;
 
   // rs is now the official device session
-  outputs_device_session_add(rd->id, rs);
+  // BK
+  // outputs_device_session_add(rd->id, rs);
 
+  DPRINTF(E_DBG, L_AIRPLAY, "session_make(): Finished\n");
   return rs;
 
  error:
@@ -3540,16 +3526,22 @@ sequence_continue(struct airplay_seq_ctx *seq_ctx)
   const char *uri;
   int ret;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "%s: sequence_continue() %d for '%s', request %s\n", 
+    seq_ctx->log_caller, cur_request->seq_type, rs->devname, cur_request->name);
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): Calling evrtsp_request_new\n");
   req = evrtsp_request_new(sequence_continue_cb, seq_ctx);
   if (!req)
     goto error;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): Calling request_headers_add\n");
   ret = request_headers_add(req, rs, cur_request->rtsp_type);
   if (ret < 0)
     goto error;
 
-  if (cur_request->content_type)
+  if (cur_request->content_type) {
+    DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): Calling evrtsp_add_header\n");
     evrtsp_add_header(req->output_headers, "Content-Type", cur_request->content_type);
+  }
 
   if (cur_request->payload_make)
     {
@@ -3571,17 +3563,21 @@ sequence_continue(struct airplay_seq_ctx *seq_ctx)
 	goto error;
     }
 
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): setting up uri\n");
   uri = (cur_request->uri) ? cur_request->uri : rs->session_url;
 
   DPRINTF(E_DBG, L_AIRPLAY, "%s: Sending %s to '%s'\n", seq_ctx->log_caller, cur_request->name, rs->devname);
 
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): Calling evrtsp_make_request\n");
   ret = evrtsp_make_request(rs->ctrl, req, cur_request->rtsp_type, uri);
   if (ret < 0)
     goto error;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): Calling evrtsp_connection_set_closecb\n");
   evrtsp_connection_set_closecb(rs->ctrl, NULL, NULL);
 
   rs->reqs_in_flight++;
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_continue(): reqs_in_flight = %d\n", rs->reqs_in_flight);
 
   return;
 
@@ -3606,6 +3602,7 @@ sequence_start(enum airplay_seq_type seq_type, struct airplay_session *rs, void 
 {
   struct airplay_seq_ctx *seq_ctx;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "%s: Starting sequence %d for '%s'\n", log_caller, seq_type, rs->devname);
   CHECK_NULL(L_AIRPLAY, seq_ctx = calloc(1, sizeof(struct airplay_seq_ctx)));
 
   seq_ctx->session = rs;
@@ -3615,6 +3612,7 @@ sequence_start(enum airplay_seq_type seq_type, struct airplay_session *rs, void 
   seq_ctx->payload_make_arg = arg;
   seq_ctx->log_caller = log_caller;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_start(): Calling sequence_continue\n");
   sequence_continue(seq_ctx); // Ownership transferred
 }
 
@@ -3897,10 +3895,14 @@ airplay_device_start(struct output_device *device, int callback_id)
 {
   struct airplay_session *rs;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "airplay_device_start():Calling session_make\n");
+
   rs = session_make(device, callback_id);
+  DPRINTF(E_DBG, L_AIRPLAY, "airplay_device_start():Returned %p from session_make\n", rs);
   if (!rs)
     return -1;
 
+  DPRINTF(E_DBG, L_AIRPLAY, "sequence_start for device '%s'\n", rs->devname);
   sequence_start(AIRPLAY_SEQ_START, rs, NULL, "device_start");
 
   return 1;
@@ -4130,8 +4132,8 @@ struct output_definition output_airplay =
   .device_authorize = airplay_device_authorize,
 };
 
-/* ---------------------------- NTP timestamp ------------------------------- */
-uint64_t airplaycl_get_ntp(struct ntp_timestamp* ntp)
+/* -------------------------- Current NTP timestamp --------------------------- */
+uint64_t airplay_get_ntp(struct ntp_timestamp* ntp)
 {
 	struct timespec ts;
 
@@ -4149,8 +4151,34 @@ uint64_t airplaycl_get_ntp(struct ntp_timestamp* ntp)
 	return ((uint64_t) (ts.tv_sec + NTP_EPOCH_DELTA) << 32) | (uint32_t)((double)ts.tv_nsec * 1e-9 * FRAC);
 }
 
-/* ---------------------------- Module initialization ------------------------ */
-int *airplay2cl_create(struct in_addr host, char *DACP_id)
+/* ---------------------------- Module management ------------------------ */
+int airplay_create(struct output_device *dev, char *DACP_id)
 {
+  int ret;
+
+  DPRINTF(E_DBG, L_AIRPLAY, "Creating AirPlay session for host %s with DACP ID '%s'\n", dev->name, DACP_id);
+  
+  ret = airplay_init();
+  if (ret < 0)
+    {
+      DPRINTF(E_FATAL, L_MAIN, "AirPlay init failed\n");
+      goto airplay_fail;
+    }
+  DPRINTF(E_DBG, L_AIRPLAY, "AirPlay init succeeded\n");
+
+  DPRINTF(E_DBG, L_AIRPLAY, "About to call airplay_device_start()\n");
+  airplay_device_start(dev, 0);
+  DPRINTF(E_DBG, L_AIRPLAY, "AirPlay session created for host %s with DACP ID '%s'\n", dev->name, DACP_id);
 	return 0;
+
+airplay_fail:
+  airplay_deinit();
+  return ret;
+}
+
+int airplay_destroy(void)
+{
+  DPRINTF(E_DBG, L_AIRPLAY, "Destroying AirPlay session\n");
+  airplay_deinit();
+  return 0;
 }

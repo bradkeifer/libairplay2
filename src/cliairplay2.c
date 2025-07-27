@@ -39,6 +39,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <event2/event.h>
+#include <event2/thread.h>
+
 #if WIN
 #include <conio.h>
 #include <time.h>
@@ -58,10 +61,13 @@
 #include "cross_util.h"
 #include "cross_log.h"
 #include "http_fetcher.h"
-#include "airplay.h"
 
 // from owntones
 #include "logger.h"
+#include "outputs.h"
+#include "airplay.h"
+#include "mdns.h"
+
 
 // try to remove as much of below as possible
 #define AIRPLAY2_SEC(ntp) ((uint32_t)((ntp) >> 32))
@@ -74,6 +80,12 @@ bool startsWith(const char *pre, const char *str)
 		   lenstr = strlen(str);
 	return lenstr < lenpre ? false : memcmp(pre, str, lenpre) == 0;
 }
+
+/* ----------------------- From owntones/main.c ------------------------------*/
+struct event_base *evbase_main;
+
+static struct output_device ap_device; // Holds the Airplay device info
+static struct airplay_extra ap_extra; // Hold the extra Airplay device info
 
 // locals
 static bool glMainRunning = true;
@@ -116,6 +128,38 @@ struct debug_s
 	{lSDEBUG, lSDEBUG, lERROR},
 };
 
+static int platform_init(void) {
+	int ret;
+  /* Initialize event base */
+  CHECK_NULL(L_MAIN, evbase_main = event_base_new());
+
+  CHECK_ERR(L_MAIN, evthread_use_pthreads());
+
+  ret = mdns_init();
+  if (ret != 0) 
+    {
+      DPRINTF(E_FATAL, L_MAIN, "mDNS init failed\n");
+
+      ret = EXIT_FAILURE;
+      goto mdns_fail;
+    }
+
+	// TODO <@bradkeifer> - signal handling
+
+mdns_fail:
+  event_base_free(evbase_main);
+
+  return ret;
+}	
+
+static void platform_deinit(void) {
+  DPRINTF(E_DBG, L_MAIN, "Deinitializing platform\n");
+
+  mdns_deinit();
+
+  event_base_free(evbase_main);
+}
+
 /*----------------------------------------------------------------------------*/
 static int print_usage(char *argv[])
 {
@@ -151,20 +195,6 @@ static int print_usage(char *argv[])
 		   "\t[-debug <debug level>] (0 = FATAL, 5 = SPAM)\n",
 		   name);
 	return -1;
-}
-
-/*----------------------------------------------------------------------------*/
-static void init_platform()
-{
-	// netsock_init();
-	// cross_ssl_load();
-}
-
-/*----------------------------------------------------------------------------*/
-static void close_platform()
-{
-	// netsock_close();
-	// cross_ssl_free();
 }
 
 /*----------------------------------------------------------------------------*/
@@ -280,7 +310,7 @@ static void *CmdPipeReaderThread(void *args)
 						// airplay2cl_pause(airplay2cl);
 						// airplay2cl_flush(airplay2cl);
 						status = PAUSED;
-						// LOG_INFO("Pause at : %u.%u", AIRPLAY2_SECNTP(airplaycl_get_ntp(NULL)));
+						// LOG_INFO("Pause at : %u.%u", AIRPLAY2_SECNTP(airplay_get_ntp(NULL)));
 						DPRINTF(E_INFO, L_MAIN, "Paused\n");
 					}
 					else
@@ -290,7 +320,7 @@ static void *CmdPipeReaderThread(void *args)
 				}
 				else if (strcmp(key, "ACTION") == 0 && strcmp(value, "PLAY") == 0)
 				{
-					// uint64_t now = airplaycl_get_ntp(NULL);
+					// uint64_t now = airplay_get_ntp(NULL);
 					// uint64_t start_at = now + MS2NTP(200) - TS2NTP(latency, airplay2cl_sample_rate(airplay2cl));
 					status = PLAYING;
 					// airplay2cl_start_at(airplay2cl, start_at);
@@ -300,7 +330,7 @@ static void *CmdPipeReaderThread(void *args)
 				else if (strcmp(key, "ACTION") == 0 && strcmp(value, "STOP") == 0)
 				{
 					status = STOPPED;
-					// LOG_INFO("Stopped at : %u.%u", AIRPLAY2_SECNTP(airplaycl_get_ntp(NULL)));
+					// LOG_INFO("Stopped at : %u.%u", AIRPLAY2_SECNTP(airplay_get_ntp(NULL)));
 					DPRINTF(E_INFO, L_MAIN, "Stopped\n");
 					// airplay2cl_stop(airplay2cl);
 					break;
@@ -367,7 +397,7 @@ int main(int argc, char *argv[])
 	{
 		if (!strcmp(argv[i], "-ntp"))
 		{
-			uint64_t t = airplaycl_get_ntp(NULL);
+			uint64_t t = airplay_get_ntp(NULL);
 			printf("%" PRIu64 "\n", t);
 			exit(0);
 		}
@@ -478,7 +508,12 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 		}
 
-		// I think player.hostname logic above is screwed, especially when combined with the code below that 
+	ret = platform_init();
+	if (ret < 0) {
+		DPRINTF(E_FATAL, L_MAIN, "Platform init failed\n");
+		return ret;
+	}
+
 	DPRINTF(E_LOG, L_MAIN, "player.hostname: %s, fname: %s\n", player.hostname, fname);
 
 	// This obtains host (192.168.4.64), interface (eth0) and netmask (0xffffff00)
@@ -500,7 +535,6 @@ int main(int argc, char *argv[])
 	else if ((infile = open(fname, O_RDONLY)) == -1)
 	{
 		DPRINTF(E_FATAL, L_MAIN, "cannot open file %s\n", fname);
-		close_platform();
 		exit(1);
 	}
 
@@ -526,9 +560,6 @@ int main(int argc, char *argv[])
 	snprintf(cmdPipeName, sizeof(cmdPipeName), "/tmp/raop-%s", activeRemote);
 	DPRINTF(E_INFO, L_MAIN, "Listening for commands on named pipe %s\n", cmdPipeName);
 	mkfifo(cmdPipeName, 0666);
-
-	// init platform, initializes stdin
-	init_platform();
 
 	// if ((encryption || auth) && strchr(et, '1'))
 	// 	crypto = AIRPLAY2_RSA;
@@ -558,23 +589,74 @@ int main(int argc, char *argv[])
 		password[len] = '\0';
 	}
 
-	// create the airplay2 context
+	// create the airplay context
 	// if ((airplay2cl = airplay2cl_create(glHost, 0, 0, glDACPid, activeRemote, alac ? AIRPLAY2_ALAC : AIRPLAY2_ALAC_RAW, DEFAULT_FRAMES_PER_CHUNK,
 	// 							latency, crypto, auth, secret, password, et, md,
 	// 							44100, 16, 2,
 	// 							volume > 0 ? airplay2cl_float_volume(volume) : -144.0)) == NULL)
-	if (airplaycl_create(glHost, glDACPid) < 0)
-	{
-		DPRINTF(E_FATAL, L_MAIN, "Cannot create airplay2 context %p", airplay2cl);
-		close_platform();
-		exit(1);
-	}
+
+	// below works, but should try to use outputs interface and emulate an owntones player in this code
+	// if (airplay_create(glHost, glDACPid) < 0)
+	// {
+	// 	DPRINTF(E_FATAL, L_MAIN, "Cannot create airplay context %p", airplay2cl);
+	// 	exit(1);
+	// }
 
 	// connect to player
 	DPRINTF(E_INFO, L_MAIN, "Connecting to player: %s (%s:%hu)\n", 
 		player.udn ? player.udn : player.hostname, 
 		inet_ntoa(player.addr), player.port
 	);
+
+	ap_device.id = 0; // We need to pass the MAC address of the device from MASS
+	ap_device.name = player.hostname;
+	ap_device.password = password;
+	ap_device.type = OUTPUT_TYPE_AIRPLAY;
+	ap_device.type_name = outputs_name(ap_device.type);
+	ap_device.extra_device_info = &ap_extra;
+	ap_device.volume = volume;
+	ap_device.quality.sample_rate = AIRPLAY_QUALITY_SAMPLE_RATE_DEFAULT;
+	ap_device.quality.bits_per_sample = AIRPLAY_QUALITY_BITS_PER_SAMPLE_DEFAULT;
+	ap_device.quality.channels = AIRPLAY_QUALITY_CHANNELS_DEFAULT;
+
+	ap_extra.mdns_name = player.hostname;
+	ap_extra.devtype = AIRPLAY_DEV_OTHER;
+	if (!am)
+		ap_extra.devtype = AIRPLAY_DEV_OTHER;
+	else if (strncmp(am, "AirPort4", strlen("AirPort4")) == 0)
+		ap_extra.devtype = AIRPLAY_DEV_APEX2_80211N; // Second generation
+	else if (strncmp(am, "AirPort", strlen("AirPort")) == 0)
+		ap_extra.devtype = AIRPLAY_DEV_APEX3_80211N; // Third generation and newer
+	else if (strncmp(am, "AppleTV5,3", strlen("AppleTV5,3")) == 0)
+		ap_extra.devtype = AIRPLAY_DEV_APPLETV4; // Stream to ATV with tvOS 10 needs to be kept alive
+	else if (strncmp(am, "AppleTV", strlen("AppleTV")) == 0)
+		ap_extra.devtype = AIRPLAY_DEV_APPLETV;
+	else if (strncmp(am, "AudioAccessory", strlen("AudioAccessory")) == 0)
+		ap_extra.devtype = AIRPLAY_DEV_HOMEPOD;
+	else if (*am == '\0')
+		DPRINTF(E_WARN, L_MAIN, "AirPlay device '%s': am has no value\n", ap_device.name);
+
+	switch (player.hostent->h_addrtype)
+	{
+	case AF_INET:
+		ap_device.v4_address = strdup(inet_ntoa(player.addr));
+		ap_device.v4_port = player.port;
+		DPRINTF(E_INFO, L_MAIN, "Adding AirPlay device '%s': features , type %s, address %s:%d\n", 
+	  		ap_device.name, airplay_devtype[ap_extra.devtype], ap_device.v4_address, ap_device.v4_port);
+		break;
+	case AF_INET6:
+		ap_device.v6_address = strdup(inet_ntoa(player.addr));
+		ap_device.v6_port = player.port;
+		DPRINTF(E_INFO, L_MAIN, "Adding AirPlay device '%s': features , type %s, address %s:%d\n", 
+	  		ap_device.name, airplay_devtype[ap_extra.devtype], ap_device.v6_address, ap_device.v6_port);
+		break;
+	default:
+		DPRINTF(E_FATAL, L_MAIN, "Error: AirPlay device '%s' has neither ipv4 og ipv6 address\n", ap_device.name);
+		goto exit;
+	}
+
+	airplay_create(&ap_device, glDACPid);
+	
 	/*
 	if (!airplay2cl_connect(airplay2cl, player.addr, player.port, volume > 0))
 	{
@@ -589,7 +671,7 @@ int main(int argc, char *argv[])
 
 	if (start || wait)
 	{
-		uint64_t now = airplaycl_get_ntp(NULL);
+		uint64_t now = airplay_get_ntp(NULL);
 
 		start_at = (start ? start : now) + MS2NTP(wait) -
 				   TS2NTP(latency, airplay2cl_sample_rate(airplay2cl));
@@ -604,7 +686,7 @@ int main(int argc, char *argv[])
 	// start the command/metadata reader thread
 	pthread_create(&glCmdPipeReaderThread, NULL, CmdPipeReaderThread, NULL);
 
-	// start = airplaycl_get_ntp(NULL);
+	// start = airplay_get_ntp(NULL);
 	status = PLAYING;
 
 	buf = malloc(DEFAULT_FRAMES_PER_CHUNK * 4);
@@ -619,7 +701,7 @@ int main(int argc, char *argv[])
 		if (status == STOPPED)
 			break;
 
-		now = airplaycl_get_ntp(NULL);
+		now = airplay_get_ntp(NULL);
 
 		// execute every second
 		if (now - last > MS2NTP(1000))
@@ -657,7 +739,8 @@ int main(int argc, char *argv[])
 
 	glMainRunning = false;
 	free(buf);
-	// airplay2cl_disconnect(airplay2cl);
+	airplay_destroy();
+	platform_deinit();
 	pthread_join(glCmdPipeReaderThread, NULL);
 	goto exit;
 
@@ -665,7 +748,7 @@ exit:
 	DPRINTF(E_INFO, L_MAIN, "exiting...\n");
 	close(cmdPipeFd);
 	unlink(cmdPipeName);
-	// airplay2cl_destroy(airplay2cl);
-	close_platform();
+	airplay_destroy();
+	platform_deinit();
 	return 0;
 }

@@ -10,6 +10,9 @@ CFLAGS += -fno-temp-file
 LDFLAGS += -lc++
 endif
 
+# Debug
+CFLAGS += -g
+
 PLATFORM ?= $(firstword $(subst -, ,$(CC)))
 HOST ?= $(word 2, $(subst -, ,$(CC)))
 
@@ -23,8 +26,10 @@ DEFINES  = -DNDEBUG -D_GNU_SOURCE -DHAVE_TIMER_SETTIME \
 		-DSTATEDIR=\".\" -DPACKAGE_NAME=\"libairplay2\" -DVERSION=\"0.1\" \
 		-DPACKAGE=\"libairplay2\" -DPACKAGE_VERSION=\"0.1\" -DHAVE_CONFIG_H
 CFLAGS  += -Wall -fPIC -ggdb -O2 $(DEFINES) -fdata-sections -ffunction-sections
-LDFLAGS += -lpthread -ldl -lm -lplist-2.0 -levent -lconfuse -luuid -lavutil \
-		-lunistring \
+LDFLAGS += -lpthread -ldl -lm -lplist-2.0 -levent -levent_pthreads -lconfuse -luuid -lavutil \
+		-lunistring -lsodium -lgcrypt -lgpg-error -lssl -lcrypto -lcurl \
+		-lavcodec -lavformat -lavfilter \
+		-lavahi-client -lavahi-common \
 		-L. -L /usr/lib
 
 TOOLS		= crosstools/src
@@ -33,6 +38,9 @@ DMAP_PARSER	= dmap-parser
 MDNS		= libmdns/targets
 CODECS		= libcodecs/targets
 OPENSSL		= libopenssl/targets/$(HOST)/$(PLATFORM)
+# PAIRING		= src/pair_ap
+PAIR_AP		= src/pair_ap
+EVRTSP		= src/evrtsp
 
 # vpath %.c $(TOOLS):$(SRC):$(DMAP_PARSER):$(FETCHER)/src
 vpath %.c $(TOOLS):$(SRC):$(FETCHER)/src
@@ -58,7 +66,10 @@ CURVE25519_SOURCES = curve25519_dh.c curve25519_mehdi.c curve25519_order.c curve
 # 	  alac.c \
 # 	  http_fetcher.c http_error_codes.c
 
-SOURCES = http_fetcher.c http_error_codes.c airplay.c \
+SOURCES = http_fetcher.c http_error_codes.c \
+		airplay.c airplay_events.c transcode.c http.c mdns_avahi.c \
+		rtp_common.c worker.c evthr.c \
+		owntones_dummy.c \
 		logger.c conffile.c misc.c
 
 # SOURCES_BIN = cross_log.c cross_ssl.c cross_util.c cross_net.c platform.c cliraop.c
@@ -69,7 +80,7 @@ OBJECTS = $(patsubst %.c,$(BUILDDIR)/%.o,$(filter %.c,$(SOURCES)))
 OBJECTS += $(patsubst %.cpp,$(BUILDDIR)/%.o,$(filter %.cpp,$(SOURCES)))
 
 # LIBRARY	= $(CODECS)/$(HOST)/$(PLATFORM)/libcodecs.a $(MDNS)/$(HOST)/$(PLATFORM)/libmdns.a
-LIBRARY =
+LIBRARY = $(PAIR_AP)/lib/$(HOST)/$(PLATFORM)/libpair_ap.a $(EVRTSP)/lib/$(HOST)/$(PLATFORM)/libevrtsp.a
 
 ifneq ($(STATIC),)
 # LIBRARY	+= $(OPENSSL)/libopenssl.a

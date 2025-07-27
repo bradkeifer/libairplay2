@@ -2,6 +2,14 @@
 #include <stdbool.h>
 #include <sodium.h>
 
+#ifdef CONFIG_OPENSSL
+#include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <sys/types.h>
+#include <md4.h>
+#include <openssl/sha.h>
+#endif
+
 #include "pair.h"
 
 #define RETURN_ERROR(s, m) \

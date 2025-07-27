@@ -22,14 +22,49 @@
  *
  */
  
-#ifndef __AIRPLAY2_CLIENT_H_
-#define __AIRPLAY2_CLIENT_H_
-
 #include <stdint.h>
 #include "misc.h"
 #include "rtp_common.h"
 
 #define DEFAULT_FRAMES_PER_CHUNK 352
+
+#define AIRPLAY_QUALITY_SAMPLE_RATE_DEFAULT     44100
+#define AIRPLAY_QUALITY_BITS_PER_SAMPLE_DEFAULT 16
+#define AIRPLAY_QUALITY_CHANNELS_DEFAULT        2
+
+
+/* Keep in sync with const char *airplay_devtype */
+enum airplay_devtype {
+  AIRPLAY_DEV_APEX2_80211N,
+  AIRPLAY_DEV_APEX3_80211N,
+  AIRPLAY_DEV_APPLETV,
+  AIRPLAY_DEV_APPLETV4,
+  AIRPLAY_DEV_HOMEPOD,
+  AIRPLAY_DEV_OTHER,
+};
+
+/* Keep in sync with enum airplay_devtype */
+static const char *airplay_devtype[] =
+{
+  "AirPort Express 2 - 802.11n",
+  "AirPort Express 3 - 802.11n",
+  "AppleTV",
+  "AppleTV4",
+  "HomePod",
+  "Other",
+};
+
+// Info about the device, which is not required by the player, only internally
+struct airplay_extra
+{
+  enum airplay_devtype devtype;
+
+  char *mdns_name;
+
+  uint16_t wanted_metadata;
+  bool supports_auth_setup;
+  bool supports_pairing_transient;
+};
 
 /* NTP timestamp definitions */
 #define FRAC             4294967296. /* 2^32 as a double */
@@ -38,7 +73,6 @@
 #define MS2NTP(ms) (((((uint64_t) (ms)) << 22) / 1000) << 10)
 #define MS2TS(ms, rate) ((((uint64_t) (ms)) * (rate)) / 1000)
 
-uint64_t airplaycl_get_ntp(struct ntp_timestamp* ntp);
-int airplaycl_create(struct in_addr host, char *DACP_id);
-
-#endif
+uint64_t airplay_get_ntp(struct ntp_timestamp* ntp);
+int airplay_create(struct output_device *dev, char *DACP_id);
+int airplay_destroy(void);

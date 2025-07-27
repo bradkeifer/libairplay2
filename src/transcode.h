@@ -3,7 +3,7 @@
 #define __TRANSCODE_H__
 
 #include <event2/buffer.h>
-// #include "http.h"
+#include "http.h"
 #include "misc.h"
 
 enum transcode_profile

@@ -1156,15 +1156,17 @@ mdns_init(void)
   DPRINTF(E_DBG, L_MDNS, "Initializing Avahi mDNS\n");
 
   cfgaddr = cfg_getstr(cfg_getsec(cfg, "general"), "bind_address");
+  DPRINTF(E_DBG, L_MDNS, "Using bind address %s\n", cfgaddr);
   if (cfgaddr)
     {
       mdns_interface = interface_index_get(cfgaddr);
+      DPRINTF(E_DBG, L_MDNS, "Using interface index %d\n", mdns_interface);
     }
 
   mdns_client = avahi_client_new(&ev_poll_api, AVAHI_CLIENT_NO_FAIL, client_callback, NULL, &error);
   if (!mdns_client)
     {
-      DPRINTF(E_WARN, L_MDNS, "mdns_init: Could not create Avahi client: %s\n", avahi_strerror(error));
+      DPRINTF(E_WARN, L_MDNS, "mdns_init: Could not create Avahi client: %d:%s\n", error, avahi_strerror(error));
       return -1;
     }
 
